@@ -17,6 +17,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 LOG = logging.getLogger('door-stein')
 OPTIONS = '/data/options.json'
 DB_PATH = '/data/processed.sqlite3'
+# Local emergency stop is independent of Cloudflare and defaults to enabled only when explicitly set.
+
 HA_BASE = 'http://supervisor/core/api'
 ENTITIES = {
     'building': 'input_boolean.door_stein_hauseingang',
@@ -95,6 +97,21 @@ def ack(session, worker, token, job_id, signature, status):
     response.raise_for_status()
 
 
+def audit(db, job_id, door, event, detail=''):
+    # Local audit log persists across restarts; no credentials or personal data.
+    with db:
+        db.execute('INSERT INTO bridge_audit(job_id,door_id,event,detail,created_at) VALUES(?,?,?,?,?)',
+                   (str(job_id)[:100], str(door)[:32], event, str(detail)[:160],
+                    datetime.now(timezone.utc).isoformat()))
+
+
+def initialize_db(db):
+    db.execute('PRAGMA journal_mode=WAL')
+    db.execute('CREATE TABLE IF NOT EXISTS processed (id TEXT PRIMARY KEY, processed_at INTEGER NOT NULL)')
+    db.execute('CREATE TABLE IF NOT EXISTS bridge_audit (seq INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT, door_id TEXT, event TEXT NOT NULL, detail TEXT, created_at TEXT NOT NULL)')
+    db.commit()
+
+
 def run():
     options, worker, token, secret, supervisor_token = load_config()
     if options.get('security_selftest', True):
@@ -103,20 +120,22 @@ def run():
     interval = max(2, min(60, int(options.get('poll_seconds', 5))))
     pulse = max(1, min(5, int(options.get('pulse_seconds', 1))))
     db = sqlite3.connect(DB_PATH)
-    db.execute('PRAGMA journal_mode=WAL')
-    db.execute('CREATE TABLE IF NOT EXISTS processed (id TEXT PRIMARY KEY, processed_at INTEGER NOT NULL)')
-    db.commit()
+    initialize_db(db)
     http = requests.Session()
-    LOG.info('Door Stein Bridge 0.2.1: TESTBETRIEB, Polling alle %d Sekunden; keine echten Schlösser', interval)
+    LOG.info('Door Stein Bridge 0.3.0: TESTBETRIEB, Polling alle %d Sekunden; keine echten Schlösser', interval)
+    LOG.info('Lokaler Not-Aus: %s; lokales Audit aktiviert', 'AKTIV' if options.get('emergency_stop', False) else 'inaktiv')
     while True:
         try:
+            if options.get('emergency_stop', False):
+                time.sleep(interval)
+                continue
             response = http.get(f'{worker}/api/ha/poll', headers={'Authorization': f'Bearer {token}'}, timeout=5)
             response.raise_for_status()
             data = response.json()
             if not isinstance(data, dict) or not isinstance(data.get('jobs'), list):
                 raise ValueError('Ungültiges Polling-Antwortformat')
             if data.get('emergency_stop') is True:
-                LOG.info('Testbetrieb gesperrt (Not-Aus)')
+                LOG.info('Testbetrieb gesperrt (Cloudflare-Not-Aus)')
             elif data.get('emergency_stop') is not False:
                 LOG.error('Unerwartete Not-Aus-Antwort: keine Ausführung')
             else:
@@ -125,8 +144,10 @@ def run():
                     try:
                         job_id, door, signature = validate(job, secret)
                         if not mark_once(db, job_id):
+                            audit(db, job_id, door, 'duplicate_rejected')
                             LOG.warning('Auftrag bereits verarbeitet: %s', job_id)
                             continue
+                        audit(db, job_id, door, 'claimed_locally')
                         # Markierung erfolgt persistent VOR der Aktion. Kein erneutes Schalten nach Fehler.
                         entity = ENTITIES[door]
                         # Zuerst sicherstellen, dass der Helper nicht bereits eingeschaltet ist.
@@ -137,14 +158,19 @@ def run():
                         finally:
                             # Auch bei Fehlern immer versuchen, den Test-Helper auszuschalten.
                             ha_call(http, supervisor_token, entity, 'turn_off')
+                        audit(db, job_id, door, 'pulse_finished')
                         ack(http, worker, token, job_id, signature, 'completed')
+                        audit(db, job_id, door, 'ack_completed')
                         LOG.info('Testimpuls bestätigt: %s (%s)', job_id, door)
                     except Exception as exc:
                         LOG.error('Auftrag %s fehlgeschlagen: %s', job_id, exc)
+                        audit(db, job_id, job.get('door_id', '?') if isinstance(job, dict) else '?', 'error', type(exc).__name__)
                         # Best effort: niemals dieselbe Aktion erneut ausführen.
                         if isinstance(job, dict) and isinstance(job.get('signature'), str) and isinstance(job.get('id'), str):
                             try:
-                                ack(http, worker, token, job['id'], job['signature'], 'cancelled')
+                                # No cancellation ACK after a pulse: execution outcome may be ambiguous.
+                                if not db.execute("SELECT 1 FROM bridge_audit WHERE job_id=? AND event='pulse_finished'", (job['id'],)).fetchone():
+                                    ack(http, worker, token, job['id'], job['signature'], 'cancelled')
                             except Exception:
                                 pass
         except Exception as exc:
