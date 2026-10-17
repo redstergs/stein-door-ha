@@ -97,6 +97,9 @@ def ack(session, worker, token, job_id, signature, status):
 
 def run():
     options, worker, token, secret, supervisor_token = load_config()
+    if options.get('security_selftest', True):
+        from security_selftest import run_selftest
+        run_selftest()
     interval = max(2, min(60, int(options.get('poll_seconds', 5))))
     pulse = max(1, min(5, int(options.get('pulse_seconds', 1))))
     db = sqlite3.connect(DB_PATH)
@@ -104,7 +107,7 @@ def run():
     db.execute('CREATE TABLE IF NOT EXISTS processed (id TEXT PRIMARY KEY, processed_at INTEGER NOT NULL)')
     db.commit()
     http = requests.Session()
-    LOG.info('Door Stein Bridge 0.2.0: TESTBETRIEB, Polling alle %d Sekunden; keine echten Schlösser', interval)
+    LOG.info('Door Stein Bridge 0.2.1: TESTBETRIEB, Polling alle %d Sekunden; keine echten Schlösser', interval)
     while True:
         try:
             response = http.get(f'{worker}/api/ha/poll', headers={'Authorization': f'Bearer {token}'}, timeout=5)

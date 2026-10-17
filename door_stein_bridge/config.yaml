@@ -1,5 +1,5 @@
 name: Door Stein Bridge (Test)
-version: "0.2.0"
+version: "0.2.1"
 slug: door_stein_bridge
 description: Signierte Öffnungsaufträge ausschließlich an Home-Assistant-Test-Helper weiterleiten.
 arch:
@@ -19,8 +19,10 @@ options:
   poll_seconds: 5
   pulse_seconds: 1
   secrets_file: "secrets.yaml"
+  security_selftest: true
 schema:
   worker_url: url
   poll_seconds: "int(2,60)"
   pulse_seconds: "int(1,5)"
   secrets_file: str
+  security_selftest: bool
