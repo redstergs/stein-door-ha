@@ -1,14 +1,16 @@
-# Door Stein Bridge v0.1.2 – Diagnose
+# Door Stein Bridge 0.1.3 – native API-Diagnose
 
-Diese Version dient ausschließlich der Diagnose, warum die Supervisor-Token-Umgebungsvariablen fehlen. **Sie fragt keine Öffnungsaufträge ab und betätigt keine Test-Helper oder Türhardware.**
+Diese Version untersucht, warum Home Assistant der Bridge trotz `homeassistant_api: true` keinen `SUPERVISOR_TOKEN` bereitstellt.
 
-## Update
+## Installation
 
-1. Inhalt dieses ZIPs in das öffentliche Repository `redstergs/stein-door-ha` hochladen (insbesondere `door_stein_bridge/config.yaml`, `Dockerfile`, `diagnose.py`).
-2. Home Assistant → Einstellungen → Apps → App-Store → Repository aktualisieren / nach Updates suchen.
-3. Bridge auf **0.1.2** aktualisieren und starten.
-4. Im Protokoll nach `Door Stein Bridge 0.1.2 – reiner Diagnosemodus` suchen und die Diagnosezeilen teilen.
+Die Dateien **im Inhalt** dieses ZIPs in das öffentliche GitHub-Repository `stein-door-ha` hochladen. In Home Assistant den App-Store aktualisieren, Bridge auf **0.1.3** aktualisieren und starten. Danach die **neuen** Protokollzeilen ab `Door Stein Bridge 0.1.3` teilen.
 
-Die Diagnose gibt nur **ja/nein** für die Verfügbarkeit von Token-Variablen, Konfigurationsdateien und DNS aus. Sie liest keine Secret-Werte aus und gibt keine Tokens aus.
+## Sicherheit
 
-**Hinweis:** Diese Version ersetzt vorübergehend die funktionale Bridge, um die Ursache sicher einzugrenzen. Nach der Diagnose erstellen wir eine korrigierte Betriebsfassung.
+- Reiner Diagnosemodus: kein Cloudflare-Polling, keine Türaktionen, keine Schalterbetätigung.
+- Prüft nur Vorhandensein der Umgebungsvariablen, Konfigurationsmount und HTTP-Statuscodes der lokalen APIs.
+- Keine Ausgabe von Secrets, Tokenwerten, HTTP-Antwortinhalten oder vollständigen Umgebungsvariablen.
+- Es werden keine neuen Zugangsdaten benötigt.
+
+Die API-Proben testen **nur** die Erreichbarkeit und liefern keinen Nachweis für die Berechtigung, Türaktionen auszuführen. Bei weiterhin fehlendem Token ist der nächste Schritt die Supervisor-App-Detailkonfiguration bzw. die Add-on-Laufzeitumgebung zu prüfen, bevor weitere Rechte vergeben werden.
