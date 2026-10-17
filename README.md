@@ -1,5 +1,7 @@
-# Door Stein HA Bridge 0.3.0
+# Door Stein HA Bridge 0.3.1
 
-Nur für zwei Home-Assistant-Test-Helper. Installation: ZIP entpacken, Dateien in das öffentliche GitHub-Repository `redstergs/stein-door-ha` hochladen, HA App-Store aktualisieren und Bridge auf 0.3.0 updaten. Siehe `door_stein_bridge/README.md`.
+Installation: Inhalt in öffentliches Repository `stein-door-ha` hochladen, App-Store neu laden, App auf 0.3.1 aktualisieren. Cloudflare Worker 0.9.0 vorher deployen.
 
-Neu: lokaler Not-Aus in App-Konfiguration und persistentes Bridge-Audit. Cloudflare Worker und Secrets bleiben unverändert.
+Neun isolierte Diagnosefälle werden aus der Administratoroberfläche über separate signierte Diagnoseaufträge gestartet. Die fünf bisherigen Start-Selbsttests bleiben optional (`security_selftest`). Diagnosefälle verwenden keine HA-API-Schaltbefehle und keine produktiven Auftrags-IDs. Die Bridge führt weiterhin nur normale Öffnungsaufträge an die zwei Test-Helper aus.
+
+**Wichtig:** Simulierte verlorene ACKs und HA-API-Fehler sind lokale Modelltests, kein Nachweis für Ende-zu-Ende-Verhalten. Das Audit in Cloudflare enthält Diagnoseerstellungen und Ergebnisse; die Bridge protokolliert ihre lokale Verarbeitung in SQLite.

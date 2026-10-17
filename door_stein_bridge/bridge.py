@@ -122,13 +122,38 @@ def run():
     db = sqlite3.connect(DB_PATH)
     initialize_db(db)
     http = requests.Session()
-    LOG.info('Door Stein Bridge 0.3.0: TESTBETRIEB, Polling alle %d Sekunden; keine echten Schlösser', interval)
+    LOG.info('Door Stein Bridge 0.3.1: TESTBETRIEB, Polling alle %d Sekunden; keine echten Schlösser', interval)
     LOG.info('Lokaler Not-Aus: %s; lokales Audit aktiviert', 'AKTIV' if options.get('emergency_stop', False) else 'inaktiv')
     while True:
         try:
             if options.get('emergency_stop', False):
                 time.sleep(interval)
                 continue
+            # Separate diagnostic channel. Never maps to Home Assistant service calls.
+            try:
+                diagnostic_response = http.get(f'{worker}/api/ha/diagnostics/poll',
+                    headers={'Authorization': f'Bearer {token}'}, timeout=5)
+                diagnostic_response.raise_for_status()
+                diagnostic_data = diagnostic_response.json()
+                if not isinstance(diagnostic_data, dict) or not isinstance(diagnostic_data.get('jobs'), list):
+                    raise ValueError('Ungültiges Diagnoseformat')
+                from diagnostic_tests import execute_diagnostic
+                for diagnostic in diagnostic_data['jobs']:
+                    if not isinstance(diagnostic, dict):
+                        continue
+                    try:
+                        result = execute_diagnostic(diagnostic, secret, db)
+                        audit(db, diagnostic.get('id', '?'), 'diagnostic',
+                              'diagnostic_passed' if result['passed'] else 'diagnostic_failed', diagnostic.get('test_type', '?'))
+                        LOG.info('DIAGNOSE %s: %s – %s', 'BESTANDEN' if result['passed'] else 'FEHLGESCHLAGEN', diagnostic.get('test_type'), result['message'])
+                        response_result = http.post(f'{worker}/api/ha/diagnostics/result',
+                            headers={'Authorization': f'Bearer {token}'},
+                            json={'id': diagnostic['id'], 'signature': diagnostic['signature'], **result}, timeout=5)
+                        response_result.raise_for_status()
+                    except Exception as exc:
+                        LOG.error('Diagnoseauftrag abgelehnt/fehlgeschlagen: %s', type(exc).__name__)
+            except Exception as exc:
+                LOG.error('Diagnose-Polling fehlgeschlagen: %s', exc)
             response = http.get(f'{worker}/api/ha/poll', headers={'Authorization': f'Bearer {token}'}, timeout=5)
             response.raise_for_status()
             data = response.json()
