@@ -1,5 +1,5 @@
 name: Door Stein Bridge (Test)
-version: "0.3.2"
+version: "0.3.3"
 slug: door_stein_bridge
 description: Signierte Öffnungsaufträge ausschließlich an Home-Assistant-Test-Helper weiterleiten.
 arch:

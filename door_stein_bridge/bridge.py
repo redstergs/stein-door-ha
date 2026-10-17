@@ -17,6 +17,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 LOG = logging.getLogger('door-stein')
 OPTIONS = '/data/options.json'
 DB_PATH = '/data/processed.sqlite3'
+AUDIT_RETENTION_DAYS = 30
+AUDIT_MAX_ROWS = 1000
+ERROR_REPEAT_SECONDS = 300
+AUDIT_CLEANUP_SECONDS = 86400
 # Local emergency stop is independent of Cloudflare and defaults to enabled only when explicitly set.
 
 HA_BASE = 'http://supervisor/core/api'
@@ -112,6 +116,44 @@ def initialize_db(db):
     db.commit()
 
 
+def prune_audit(db):
+    """Prune only human-readable audit events, NEVER the replay-protection table."""
+    cutoff = datetime.fromtimestamp(time.time() - AUDIT_RETENTION_DAYS * 86400, timezone.utc).isoformat()
+    with db:
+        db.execute('DELETE FROM bridge_audit WHERE created_at < ?', (cutoff,))
+        db.execute("""DELETE FROM bridge_audit WHERE seq NOT IN
+                      (SELECT seq FROM bridge_audit ORDER BY seq DESC LIMIT ?)""", (AUDIT_MAX_ROWS,))
+    remaining = db.execute('SELECT COUNT(*) FROM bridge_audit').fetchone()[0]
+    LOG.info('Audit-Pflege: maximal %d Einträge / %d Tage; aktuell %d Einträge; Duplikatschutz unverändert',
+             AUDIT_MAX_ROWS, AUDIT_RETENTION_DAYS, remaining)
+
+
+class ErrorReporter:
+    """Log first failure, then periodic summaries; log a single recovery."""
+    def __init__(self):
+        self.states = {}
+
+    def failure(self, channel, exc):
+        now = time.monotonic()
+        state = self.states.get(channel)
+        kind = type(exc).__name__
+        detail = str(exc)
+        if state is None:
+            LOG.error('%s fehlgeschlagen (%s): %s', channel, kind, detail)
+            self.states[channel] = [now, 1]
+        else:
+            state[1] += 1
+            if now - state[0] >= ERROR_REPEAT_SECONDS:
+                LOG.error('%s weiterhin gestört: %d Fehler seit letzter Meldung; letzter Fehler (%s): %s',
+                          channel, state[1], kind, detail)
+                state[0], state[1] = now, 0
+
+    def success(self, channel):
+        if channel in self.states:
+            LOG.info('%s wieder erreichbar', channel)
+            del self.states[channel]
+
+
 def run():
     options, worker, token, secret, supervisor_token = load_config()
     if options.get('security_selftest', True):
@@ -121,11 +163,17 @@ def run():
     pulse = max(1, min(5, int(options.get('pulse_seconds', 1))))
     db = sqlite3.connect(DB_PATH)
     initialize_db(db)
+    prune_audit(db)
+    next_cleanup = time.monotonic() + AUDIT_CLEANUP_SECONDS
+    reporter = ErrorReporter()
     http = requests.Session()
-    LOG.info('Door Stein Bridge 0.3.1: TESTBETRIEB, Polling alle %d Sekunden; keine echten Schlösser', interval)
+    LOG.info('Door Stein Bridge 0.3.3: TESTBETRIEB, Polling alle %d Sekunden; keine echten Schlösser', interval)
     LOG.info('Lokaler Not-Aus: %s; lokales Audit aktiviert', 'AKTIV' if options.get('emergency_stop', False) else 'inaktiv')
     while True:
         try:
+            if time.monotonic() >= next_cleanup:
+                prune_audit(db)
+                next_cleanup = time.monotonic() + AUDIT_CLEANUP_SECONDS
             if options.get('emergency_stop', False):
                 time.sleep(interval)
                 continue
@@ -134,6 +182,7 @@ def run():
                 diagnostic_response = http.get(f'{worker}/api/ha/diagnostics/poll',
                     headers={'Authorization': f'Bearer {token}'}, timeout=5)
                 diagnostic_response.raise_for_status()
+                reporter.success('Diagnose-Polling')
                 diagnostic_data = diagnostic_response.json()
                 if not isinstance(diagnostic_data, dict) or not isinstance(diagnostic_data.get('jobs'), list):
                     raise ValueError('Ungültiges Diagnoseformat')
@@ -153,9 +202,10 @@ def run():
                     except Exception as exc:
                         LOG.error('Diagnoseauftrag abgelehnt/fehlgeschlagen: %s', type(exc).__name__)
             except Exception as exc:
-                LOG.error('Diagnose-Polling fehlgeschlagen: %s', exc)
+                reporter.failure('Diagnose-Polling', exc)
             response = http.get(f'{worker}/api/ha/poll', headers={'Authorization': f'Bearer {token}'}, timeout=5)
             response.raise_for_status()
+            reporter.success('Auftrags-Polling')
             data = response.json()
             if not isinstance(data, dict) or not isinstance(data.get('jobs'), list):
                 raise ValueError('Ungültiges Polling-Antwortformat')
@@ -199,7 +249,7 @@ def run():
                             except Exception:
                                 pass
         except Exception as exc:
-            LOG.error('Polling fehlgeschlagen: %s', exc)
+            reporter.failure('Auftrags-Polling', exc)
         time.sleep(interval)
 
 
