@@ -21,7 +21,7 @@ AUDIT_RETENTION_DAYS = 30
 AUDIT_MAX_ROWS = 1000
 ERROR_REPEAT_SECONDS = 300
 AUDIT_CLEANUP_SECONDS = 86400
-# Local emergency stop is independent of Cloudflare and defaults to enabled only when explicitly set.
+# HA input_boolean is the local permission gate; unknown state fails closed.
 
 HA_BASE = 'http://supervisor/core/api'
 ENTITIES = {
@@ -92,6 +92,17 @@ def ha_call(session, supervisor_token, entity, service):
         json={'entity_id': entity}, timeout=4,
     )
     response.raise_for_status()
+
+
+FREIGABE_ENTITY = 'input_boolean.door_stein_freigabe'
+
+
+def locally_enabled(session, supervisor_token):
+    response = session.get(f'{HA_BASE}/states/{FREIGABE_ENTITY}',
+        headers={'Authorization': f'Bearer {supervisor_token}'}, timeout=4)
+    response.raise_for_status()
+    state = response.json()
+    return isinstance(state, dict) and state.get('entity_id') == FREIGABE_ENTITY and state.get('state') == 'on'
 
 
 def ack(session, worker, token, job_id, signature, status):
@@ -167,16 +178,13 @@ def run():
     next_cleanup = time.monotonic() + AUDIT_CLEANUP_SECONDS
     reporter = ErrorReporter()
     http = requests.Session()
-    LOG.info('Door Stein Bridge 0.3.3: TESTBETRIEB, Polling alle %d Sekunden; keine echten Schlösser', interval)
-    LOG.info('Lokaler Not-Aus: %s; lokales Audit aktiviert', 'AKTIV' if options.get('emergency_stop', False) else 'inaktiv')
+    LOG.info('Door Stein Bridge 0.4.0: TESTBETRIEB, Polling alle %d Sekunden; keine echten Schlösser', interval)
+    LOG.info('Lokale HA-Freigabe wird vor jedem Auftrag geprüft; lokales Audit aktiviert')
     while True:
         try:
             if time.monotonic() >= next_cleanup:
                 prune_audit(db)
                 next_cleanup = time.monotonic() + AUDIT_CLEANUP_SECONDS
-            if options.get('emergency_stop', False):
-                time.sleep(interval)
-                continue
             # Separate diagnostic channel. Never maps to Home Assistant service calls.
             try:
                 diagnostic_response = http.get(f'{worker}/api/ha/diagnostics/poll',
@@ -224,10 +232,19 @@ def run():
                             continue
                         audit(db, job_id, door, 'claimed_locally')
                         # Markierung erfolgt persistent VOR der Aktion. Kein erneutes Schalten nach Fehler.
+                        if not locally_enabled(http, supervisor_token):
+                            audit(db, job_id, door, 'local_gate_denied')
+                            LOG.warning('Lokale Freigabe AUS oder nicht verfügbar: Auftrag %s blockiert', job_id)
+                            ack(http, worker, token, job_id, signature, 'cancelled')
+                            continue
                         entity = ENTITIES[door]
                         # Zuerst sicherstellen, dass der Helper nicht bereits eingeschaltet ist.
                         ha_call(http, supervisor_token, entity, 'turn_off')
                         try:
+                            if not locally_enabled(http, supervisor_token):
+                                audit(db, job_id, door, 'local_gate_denied')
+                                ack(http, worker, token, job_id, signature, 'cancelled')
+                                continue
                             ha_call(http, supervisor_token, entity, 'turn_on')
                             time.sleep(pulse)
                         finally:
