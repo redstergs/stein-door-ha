@@ -1,7 +1,7 @@
 name: Door Stein Bridge (Test)
-version: "0.1.1"
+version: "0.1.2"
 slug: door_stein_bridge
-description: Pollt signierte Testaufträge aus Door Stein; niemals echte Schlösser schalten.
+description: Diagnoseversion ohne Polling und ohne Türaktionen.
 arch:
   - aarch64
   - amd64
