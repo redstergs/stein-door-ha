@@ -64,7 +64,8 @@ def validate(job, secret):
     expected = hmac.new(secret, msg, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(signature, expected):
         raise ValueError('HMAC-Prüfung fehlgeschlagen')
-    if not (time.time() < parse_expiry(expiry) <= time.time() + 30):
+    current = time.time()
+    if not (current < parse_expiry(expiry) <= current + 30):
         raise ValueError('Auftrag abgelaufen oder zeitlich ungültig')
     return job_id, door, signature
 
@@ -103,12 +104,14 @@ def run():
     db.execute('CREATE TABLE IF NOT EXISTS processed (id TEXT PRIMARY KEY, processed_at INTEGER NOT NULL)')
     db.commit()
     http = requests.Session()
-    LOG.info('Bridge gestartet: Testbetrieb, Polling alle %d Sekunden', interval)
+    LOG.info('Door Stein Bridge 0.2.0: TESTBETRIEB, Polling alle %d Sekunden; keine echten Schlösser', interval)
     while True:
         try:
             response = http.get(f'{worker}/api/ha/poll', headers={'Authorization': f'Bearer {token}'}, timeout=5)
             response.raise_for_status()
             data = response.json()
+            if not isinstance(data, dict) or not isinstance(data.get('jobs'), list):
+                raise ValueError('Ungültiges Polling-Antwortformat')
             if data.get('emergency_stop') is True:
                 LOG.info('Testbetrieb gesperrt (Not-Aus)')
             elif data.get('emergency_stop') is not False:
@@ -123,6 +126,8 @@ def run():
                             continue
                         # Markierung erfolgt persistent VOR der Aktion. Kein erneutes Schalten nach Fehler.
                         entity = ENTITIES[door]
+                        # Zuerst sicherstellen, dass der Helper nicht bereits eingeschaltet ist.
+                        ha_call(http, supervisor_token, entity, 'turn_off')
                         try:
                             ha_call(http, supervisor_token, entity, 'turn_on')
                             time.sleep(pulse)

@@ -1,2 +1,2 @@
 #!/usr/bin/with-contenv sh
-exec python3 -u /diagnose.py
+exec python3 -u /bridge.py

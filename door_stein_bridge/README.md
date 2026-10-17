@@ -1,9 +1,7 @@
-# Door Stein Bridge 0.1.4 – S6-Diagnose
+# Door Stein Bridge v0.2.0 (Test)
 
-**Keine Türaktionen, kein Cloudflare-Polling.**
+Fragt den privaten Door-Stein-Worker alle `poll_seconds` Sekunden nach Öffnungsaufträgen. Prüft HMAC-SHA-256, Tür-ID, Ablaufzeit und persistente Auftrags-ID. Betätigt ausschließlich `input_boolean.door_stein_hauseingang` und `input_boolean.door_stein_wohnungstuer` und bestätigt das Ergebnis beim Worker.
 
-Diese Version verwendet statt des direkten Docker-CMD einen regulären S6-Service mit `#!/usr/bin/with-contenv sh`. Sie prüft ausschließlich, ob die vier erwarteten Supervisor-Variablennamen im Python-Prozess, im PID-1-Prozess und in S6-Umgebungsverzeichnissen vorhanden sind. Es werden **keine Werte** ausgegeben. Außerdem prüft sie wie zuvor nur API-HTTP-Statuscodes.
+Die Secrets `door_stein_api_token` und `door_stein_hmac_secret` werden aus `/homeassistant/secrets.yaml` gelesen. Der HA-API-Token wird automatisch über den S6-Dienst `with-contenv` bereitgestellt. Keine Zugangsdaten ins Repository hochladen.
 
-`homeassistant_api: true` und `hassio_api: true` bleiben unverändert. Es sind keine neuen Secrets erforderlich.
-
-Wenn auch hier kein Token sichtbar ist, ist die Ursache nicht sicher identifiziert. Dann müssen die tatsächlich installierten App-Metadaten und Supervisor-Protokolle geprüft werden. Keine echte Türhardware anschließen.
+**Achtung:** Dies ist ein Testsystem und noch keine Freigabe für echte Türhardware.
