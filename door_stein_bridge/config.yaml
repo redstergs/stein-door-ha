@@ -1,7 +1,7 @@
 name: Door Stein Bridge (Test)
-version: "0.1.3"
+version: "0.1.4"
 slug: door_stein_bridge
-description: Native Home Assistant API Diagnose ohne Türaktionen.
+description: Diagnose der nativen Supervisor-Token-Bereitstellung ohne Türaktionen.
 arch:
   - aarch64
   - amd64

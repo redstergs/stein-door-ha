@@ -1,4 +1,4 @@
-"""Door Stein 0.1.3: safe native API diagnostics, no polling or actions."""
+"""Door Stein 0.1.4: safe native API diagnostics, no polling or actions."""
 import json
 import logging
 import os
@@ -26,11 +26,31 @@ def probe(label, url, token):
 
 
 def main():
-    log.info('Door Stein Bridge 0.1.3 – API-Diagnose; KEIN Polling, KEINE Türaktionen')
+    log.info('Door Stein Bridge 0.1.4 – S6-Umgebungsdiagnose; KEIN Polling, KEINE Türaktionen')
     names = ('SUPERVISOR_TOKEN', 'HASSIO_TOKEN', 'SUPERVISOR_API', 'HASSIO_API')
     for name in names:
         log.info('%s vorhanden: %s', name, 'ja' if os.environ.get(name) else 'nein')
     token = os.environ.get('SUPERVISOR_TOKEN') or os.environ.get('HASSIO_TOKEN')
+    # Check only presence of named variables in parent process and S6 env dirs.
+    # Never print or use secret values from those locations.
+    for label, path in (
+        ('PID 1', '/proc/1/environ'),
+        ('S6 container_environment', '/run/s6/container_environment'),
+        ('S6 legacy env', '/var/run/s6/container_environment'),
+    ):
+        try:
+            root = Path(path)
+            if root.is_dir():
+                present = [n for n in ('SUPERVISOR_TOKEN', 'HASSIO_TOKEN', 'SUPERVISOR_API', 'HASSIO_API') if (root / n).exists()]
+                log.info('%s vorhanden: ja; erwartete Namen: %s', label, ', '.join(present) if present else 'keine')
+            elif root.is_file():
+                names = {entry.split(b'=', 1)[0] for entry in root.read_bytes().split(b'\x00') if b'=' in entry}
+                present = [n for n in ('SUPERVISOR_TOKEN', 'HASSIO_TOKEN', 'SUPERVISOR_API', 'HASSIO_API') if n.encode() in names]
+                log.info('%s lesbar: ja; erwartete Namen: %s', label, ', '.join(present) if present else 'keine')
+            else:
+                log.info('%s vorhanden: nein', label)
+        except (OSError, PermissionError):
+            log.info('%s nicht lesbar', label)
     log.info('Prozess-ID: %s; effektive UID: %s', os.getpid(), os.geteuid())
     for path in ('/data/options.json', '/homeassistant/secrets.yaml'):
         log.info('%s vorhanden: %s', path, 'ja' if Path(path).is_file() else 'nein')

@@ -1,7 +1,9 @@
-# Door Stein Bridge – nur Testbetrieb
+# Door Stein Bridge 0.1.4 – S6-Diagnose
 
-Dieses Add-on ist ausschließlich für Home-Assistant-Test-Helper vorgesehen. Es enthält keine Nuki- oder Doorman-Aktionen.
+**Keine Türaktionen, kein Cloudflare-Polling.**
 
-Konfiguration: Worker-URL, Polling-Intervall und Impulsdauer. Die beiden Secrets werden aus `/homeassistant/secrets.yaml` gelesen (`door_stein_api_token`, `door_stein_hmac_secret`). Die HA-Konfiguration ist nur lesbar eingebunden. Keine Secrets in Add-on-Optionen oder Logs.
+Diese Version verwendet statt des direkten Docker-CMD einen regulären S6-Service mit `#!/usr/bin/with-contenv sh`. Sie prüft ausschließlich, ob die vier erwarteten Supervisor-Variablennamen im Python-Prozess, im PID-1-Prozess und in S6-Umgebungsverzeichnissen vorhanden sind. Es werden **keine Werte** ausgegeben. Außerdem prüft sie wie zuvor nur API-HTTP-Statuscodes.
 
-Ein Auftrag wird vor der Testaktion persistent als verarbeitet markiert. Nach einem Absturz kann er verloren gehen; er wird nicht erneut geschaltet. Das Add-on ist nicht für echte Türhardware freigegeben.
+`homeassistant_api: true` und `hassio_api: true` bleiben unverändert. Es sind keine neuen Secrets erforderlich.
+
+Wenn auch hier kein Token sichtbar ist, ist die Ursache nicht sicher identifiziert. Dann müssen die tatsächlich installierten App-Metadaten und Supervisor-Protokolle geprüft werden. Keine echte Türhardware anschließen.

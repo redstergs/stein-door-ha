@@ -1,16 +1,11 @@
-# Door Stein Bridge 0.1.3 – native API-Diagnose
+# Door Stein Bridge 0.1.4 – Diagnose der S6-Umgebung
 
-Diese Version untersucht, warum Home Assistant der Bridge trotz `homeassistant_api: true` keinen `SUPERVISOR_TOKEN` bereitstellt.
+1. **Inhalt** dieser ZIP in das öffentliche GitHub-Repository `redstergs/stein-door-ha` hochladen. Keine Secrets hochladen.
+2. Home Assistant → Einstellungen → Apps → App-Store → nach Updates suchen; Bridge auf **0.1.4** aktualisieren.
+3. Bridge starten und die Logzeilen ab `Door Stein Bridge 0.1.4` mitteilen.
 
-## Installation
+## Änderung
 
-Die Dateien **im Inhalt** dieses ZIPs in das öffentliche GitHub-Repository `stein-door-ha` hochladen. In Home Assistant den App-Store aktualisieren, Bridge auf **0.1.3** aktualisieren und starten. Danach die **neuen** Protokollzeilen ab `Door Stein Bridge 0.1.3` teilen.
+Die Diagnose läuft jetzt als regulärer S6-Service über `#!/usr/bin/with-contenv sh`, statt als Docker-`CMD`. Sie untersucht, ob die Supervisor-Variablen bei PID 1, in der S6-Umgebung oder im Python-Prozess vorhanden sind. **Nur Namen und Ja/Nein**, niemals Werte.
 
-## Sicherheit
-
-- Reiner Diagnosemodus: kein Cloudflare-Polling, keine Türaktionen, keine Schalterbetätigung.
-- Prüft nur Vorhandensein der Umgebungsvariablen, Konfigurationsmount und HTTP-Statuscodes der lokalen APIs.
-- Keine Ausgabe von Secrets, Tokenwerten, HTTP-Antwortinhalten oder vollständigen Umgebungsvariablen.
-- Es werden keine neuen Zugangsdaten benötigt.
-
-Die API-Proben testen **nur** die Erreichbarkeit und liefern keinen Nachweis für die Berechtigung, Türaktionen auszuführen. Bei weiterhin fehlendem Token ist der nächste Schritt die Supervisor-App-Detailkonfiguration bzw. die Add-on-Laufzeitumgebung zu prüfen, bevor weitere Rechte vergeben werden.
+**Reiner Diagnosemodus**: keine Cloudflare-Abfrage, keine Schalterbetätigung, keine Türöffnung. Keine neuen Berechtigungen oder Zugangsdaten.
