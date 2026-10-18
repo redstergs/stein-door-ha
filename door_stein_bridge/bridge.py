@@ -165,6 +165,41 @@ class ErrorReporter:
             del self.states[channel]
 
 
+
+class UnsafeOutput(RuntimeError):
+    """The HA output cannot be verified OFF; all further pulses must stop."""
+
+
+def helper_is_off(session, supervisor_token, entity):
+    response = session.get(f'{HA_BASE}/states/{entity}',
+        headers={'Authorization': f'Bearer {supervisor_token}'}, timeout=4)
+    response.raise_for_status()
+    state = response.json()
+    return isinstance(state, dict) and state.get('entity_id') == entity and state.get('state') == 'off'
+
+
+def ensure_outputs_off(session, supervisor_token, db, reason='recovery', retries=3):
+    """Only OFF commands; never generate an ON pulse during recovery."""
+    failed = []
+    for door, entity in ENTITIES.items():
+        verified = False
+        for attempt in range(retries):
+            try:
+                ha_call(session, supervisor_token, entity, 'turn_off')
+                if helper_is_off(session, supervisor_token, entity):
+                    verified = True
+                    break
+            except Exception as exc:
+                LOG.warning('OFF-Recovery %s Versuch %d: %s', door, attempt + 1, type(exc).__name__)
+            if attempt + 1 < retries:
+                time.sleep(min(attempt + 1, 2))
+        if not verified:
+            failed.append(door)
+    if failed:
+        audit(db, 'system', ','.join(failed), 'output_state_unknown', reason)
+        raise UnsafeOutput('Tür-Helper nicht sicher AUS: ' + ','.join(failed))
+
+
 def run():
     options, worker, token, secret, supervisor_token = load_config()
     if options.get('security_selftest', True):
@@ -178,8 +213,9 @@ def run():
     next_cleanup = time.monotonic() + AUDIT_CLEANUP_SECONDS
     reporter = ErrorReporter()
     http = requests.Session()
-    LOG.info('Door Stein Bridge 0.4.0: TESTBETRIEB, Polling alle %d Sekunden; keine echten Schlösser', interval)
+    LOG.info('Door Stein Bridge 0.5.0: TESTBETRIEB, Polling alle %d Sekunden; keine echten Schlösser', interval)
     LOG.info('Lokale HA-Freigabe wird vor jedem Auftrag geprüft; lokales Audit aktiviert')
+    outputs_safe = False
     while True:
         try:
             if time.monotonic() >= next_cleanup:
@@ -211,6 +247,14 @@ def run():
                         LOG.error('Diagnoseauftrag abgelehnt/fehlgeschlagen: %s', type(exc).__name__)
             except Exception as exc:
                 reporter.failure('Diagnose-Polling', exc)
+            if not outputs_safe:
+                try:
+                    ensure_outputs_off(http, supervisor_token, db, 'startup_or_recovery')
+                    outputs_safe = True
+                    reporter.success('Sicherer Ausgangszustand')
+                    audit(db, 'system', 'all', 'outputs_verified_off')
+                except Exception as exc:
+                    reporter.failure('Sicherer Ausgangszustand', exc)
             response = http.get(f'{worker}/api/ha/poll', headers={'Authorization': f'Bearer {token}'}, timeout=5)
             response.raise_for_status()
             reporter.success('Auftrags-Polling')
@@ -221,9 +265,13 @@ def run():
                 LOG.info('Testbetrieb gesperrt (Cloudflare-Not-Aus)')
             elif data.get('emergency_stop') is not False:
                 LOG.error('Unerwartete Not-Aus-Antwort: keine Ausführung')
+            elif not outputs_safe:
+                LOG.warning('Öffnungsaufträge blockiert: Ausgangszustand unklar')
             else:
                 for job in data.get('jobs', []):
                     job_id = job.get('id', '?') if isinstance(job, dict) else '?'
+                    turn_on_started = False
+                    door = '?'
                     try:
                         job_id, door, signature = validate(job, secret)
                         if not mark_once(db, job_id):
@@ -231,40 +279,51 @@ def run():
                             LOG.warning('Auftrag bereits verarbeitet: %s', job_id)
                             continue
                         audit(db, job_id, door, 'claimed_locally')
-                        # Markierung erfolgt persistent VOR der Aktion. Kein erneutes Schalten nach Fehler.
                         if not locally_enabled(http, supervisor_token):
                             audit(db, job_id, door, 'local_gate_denied')
-                            LOG.warning('Lokale Freigabe AUS oder nicht verfügbar: Auftrag %s blockiert', job_id)
                             ack(http, worker, token, job_id, signature, 'cancelled')
                             continue
                         entity = ENTITIES[door]
-                        # Zuerst sicherstellen, dass der Helper nicht bereits eingeschaltet ist.
+                        # The preflight must verify OFF, not merely request it.
                         ha_call(http, supervisor_token, entity, 'turn_off')
+                        if not helper_is_off(http, supervisor_token, entity):
+                            raise UnsafeOutput('Preflight AUS nicht bestätigt')
+                        if not locally_enabled(http, supervisor_token):
+                            audit(db, job_id, door, 'local_gate_denied')
+                            ack(http, worker, token, job_id, signature, 'cancelled')
+                            continue
+                        # Re-check signed expiry immediately before the ON service call.
+                        if time.time() >= parse_expiry(job['expires_at']):
+                            audit(db, job_id, door, 'expired_before_pulse')
+                            ack(http, worker, token, job_id, signature, 'cancelled')
+                            continue
+                        turn_on_started = True
+                        audit(db, job_id, door, 'turn_on_attempt_started')
                         try:
-                            if not locally_enabled(http, supervisor_token):
-                                audit(db, job_id, door, 'local_gate_denied')
-                                ack(http, worker, token, job_id, signature, 'cancelled')
-                                continue
                             ha_call(http, supervisor_token, entity, 'turn_on')
                             time.sleep(pulse)
                         finally:
-                            # Auch bei Fehlern immer versuchen, den Test-Helper auszuschalten.
-                            ha_call(http, supervisor_token, entity, 'turn_off')
+                            try:
+                                ensure_outputs_off(http, supervisor_token, db, 'after_pulse')
+                            except Exception:
+                                outputs_safe = False
+                                raise
                         audit(db, job_id, door, 'pulse_finished')
                         ack(http, worker, token, job_id, signature, 'completed')
                         audit(db, job_id, door, 'ack_completed')
                         LOG.info('Testimpuls bestätigt: %s (%s)', job_id, door)
                     except Exception as exc:
                         LOG.error('Auftrag %s fehlgeschlagen: %s', job_id, exc)
-                        audit(db, job_id, job.get('door_id', '?') if isinstance(job, dict) else '?', 'error', type(exc).__name__)
-                        # Best effort: niemals dieselbe Aktion erneut ausführen.
-                        if isinstance(job, dict) and isinstance(job.get('signature'), str) and isinstance(job.get('id'), str):
+                        audit(db, job_id, door, 'outcome_unknown' if turn_on_started else 'error', type(exc).__name__)
+                        # Any unexpected failure requires a verified OFF recovery before another pulse.
+                        outputs_safe = False
+                        # Never claim cancellation after a possible ON attempt.
+                        if not turn_on_started and isinstance(job, dict) and isinstance(job.get('signature'), str) and isinstance(job.get('id'), str):
                             try:
-                                # No cancellation ACK after a pulse: execution outcome may be ambiguous.
-                                if not db.execute("SELECT 1 FROM bridge_audit WHERE job_id=? AND event='pulse_finished'", (job['id'],)).fetchone():
-                                    ack(http, worker, token, job['id'], job['signature'], 'cancelled')
+                                ack(http, worker, token, job['id'], job['signature'], 'cancelled')
                             except Exception:
                                 pass
+
         except Exception as exc:
             reporter.failure('Auftrags-Polling', exc)
         time.sleep(interval)
