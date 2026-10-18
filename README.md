@@ -1,3 +1,19 @@
-# Door Stein Bridge v0.4.0 (Testbetrieb)
+# Door · Stein – Home Assistant Bridge v0.5.0
 
-Nur Home-Assistant-Test-Helper, keine echte Türhardware. Das lokale Gate `input_boolean.door_stein_freigabe` muss in HA existieren. Die Vorlage `door_stein_bridge/ha_package_snippet.yaml` ist in die bestehende Paketdatei zu **integrieren**, nicht als zweite `input_boolean`-Definition zu duplizieren. Kein `initial`-Wert: HA stellt den letzten Zustand wieder her; bei unbekanntem Zustand verweigert die Bridge die Ausführung. Der Schalter muss vor dem ersten Test ausdrücklich eingeschaltet werden. Die Bridge liest den Schalter direkt vor der Schaltung über die HA-API. Änderungen sind über HA-APIs/Automationen möglich: Eine reine Dashboard-Karte garantiert KEINE Beschränkung auf das lokale Netz. Dafür sind getrennte HA-Zugriffskontrollen/Netzwerkmaßnahmen nötig. Die bisherige Cloudflare-Testbetriebssperre bleibt unabhängig aktiv. Kein Remote-Not-Aus wird hier abgeschafft. 
+Sicherheitsupdate der Bridge v0.4.0. Die Bridge schaltet **ausschließlich** die zwei fest definierten HA-Test-Helper; keine echte Türhardware.
+
+## Änderungen
+
+- Beim Start und nach einem Fehler: beide Tür-Helper ausschalten und tatsächlichen `off`-Zustand über HA prüfen; bis zur erfolgreichen Prüfung keine Öffnungsimpulse.
+- Bei fehlerhaftem finalem Ausschalten: begrenzte OFF-Wiederholungen und Sperre weiterer Öffnungen, bis ein sicherer Zustand wieder bestätigt ist.
+- Vor dem Einschaltaufruf: lokale Freigabe und signierte Ablaufzeit erneut prüfen.
+- Begonnene Einschaltversuche werden lokal protokolliert; bei unklarem Ausgang niemals ein irreführendes `cancelled`-ACK und niemals eine automatische Wiederholung des Impulses.
+- Unverändert: HMAC, Replay-Schutz, Diagnosekanal, HA-Freigabe, HTTPS-Polling und Secrets.
+
+## Update
+
+Den Inhalt des ZIP in das öffentliche Add-on-Repository übernehmen und das Add-on auf v0.5.0 aktualisieren. Bestehende Konfiguration und Secrets beibehalten. **Keine** neuen Token nötig. Die Worker-Version v0.11.0 ist für das gemeinsame Release vorgesehen.
+
+## Tests
+
+Bestehende fünf isolierte Security-Selbsttests und vier zusätzliche lokale Recovery-/SQLite-Tests erfolgreich. Ein tatsächlicher HA-Neustart, Netzwerkunterbrechungen und ein vollständiger Ende-zu-Ende-Test müssen in der Testinstallation noch geprüft werden. Unabhängige elektrische Impulsbegrenzung ist erst mit der späteren Hardware festzulegen.
