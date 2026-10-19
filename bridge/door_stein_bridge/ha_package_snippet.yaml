@@ -1,6 +1,0 @@
-# In bestehende /config/packages/door_stein.yaml unter input_boolean: ergänzen.
-# KEIN initial: Wert setzen: HA stellt den vorherigen Zustand wieder her.
-input_boolean:
-  door_stein_freigabe:
-    name: Door Stein Freigabe
-    icon: mdi:shield-lock-open
