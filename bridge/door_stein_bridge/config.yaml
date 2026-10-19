@@ -1,0 +1,28 @@
+name: Door Stein Bridge
+version: "0.99"
+slug: door_stein_bridge
+description: Signierte Öffnungsaufträge an die festgelegten Home-Assistant-Helper weiterleiten.
+arch:
+  - aarch64
+  - amd64
+  - armv7
+startup: application
+boot: auto
+init: false
+homeassistant_api: true
+hassio_api: true
+map:
+  - type: homeassistant_config
+    read_only: true
+options:
+  worker_url: "https://stein-door.p-63e.workers.dev"
+  poll_seconds: 5
+  pulse_seconds: 1
+  secrets_file: "secrets.yaml"
+  security_selftest: true
+schema:
+  worker_url: url
+  poll_seconds: "int(2,60)"
+  pulse_seconds: "int(1,5)"
+  secrets_file: str
+  security_selftest: bool
