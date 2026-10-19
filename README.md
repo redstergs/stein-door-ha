@@ -1,19 +1,18 @@
-# Door · Stein – Home Assistant Bridge v0.5.0
+# Door · Stein – Home Assistant Add-on-Repository (v1.0)
 
-Sicherheitsupdate der Bridge v0.4.0. Die Bridge schaltet **ausschließlich** die zwei fest definierten HA-Test-Helper; keine echte Türhardware.
+Dieses Repository enthält das Add-on **Door Stein Bridge** unter [`door_stein_bridge/`](door_stein_bridge/).
 
-## Änderungen
+## Aufbau
 
-- Beim Start und nach einem Fehler: beide Tür-Helper ausschalten und tatsächlichen `off`-Zustand über HA prüfen; bis zur erfolgreichen Prüfung keine Öffnungsimpulse.
-- Bei fehlerhaftem finalem Ausschalten: begrenzte OFF-Wiederholungen und Sperre weiterer Öffnungen, bis ein sicherer Zustand wieder bestätigt ist.
-- Vor dem Einschaltaufruf: lokale Freigabe und signierte Ablaufzeit erneut prüfen.
-- Begonnene Einschaltversuche werden lokal protokolliert; bei unklarem Ausgang niemals ein irreführendes `cancelled`-ACK und niemals eine automatische Wiederholung des Impulses.
-- Unverändert: HMAC, Replay-Schutz, Diagnosekanal, HA-Freigabe, HTTPS-Polling und Secrets.
+- `repository.yaml`: Metadaten des Home-Assistant-Add-on-Repositories
+- `door_stein_bridge/`: Add-on mit `config.yaml`, `Dockerfile`, `run`, `bridge.py` und Diagnoseskripten
+- `door_stein_bridge/README.md`: technische Hinweise zur Bridge
+- `RELEASE_STATUS.md`: Freigabestatus und offene Integrationstests
 
-## Update
+## Installation
 
-Den Inhalt des ZIP in das öffentliche Add-on-Repository übernehmen und das Add-on auf v0.5.0 aktualisieren. Bestehende Konfiguration und Secrets beibehalten. **Keine** neuen Token nötig. Die Worker-Version v0.11.0 ist für das gemeinsame Release vorgesehen.
+Dieses Repository als benutzerdefiniertes Add-on-Repository in Home Assistant hinzufügen und **Door Stein Bridge** installieren. Die notwendigen Zugangsdaten ausschließlich in der lokalen Konfiguration bereitstellen, nicht in Git committen.
 
-## Tests
+Die Bridge schaltet ausschließlich die HA-Helper; physische Türöffner benötigen getrennte HA-Automationen und hardwareseitige Impulsbegrenzung.
 
-Bestehende fünf isolierte Security-Selbsttests und vier zusätzliche lokale Recovery-/SQLite-Tests erfolgreich. Ein tatsächlicher HA-Neustart, Netzwerkunterbrechungen und ein vollständiger Ende-zu-Ende-Test müssen in der Testinstallation noch geprüft werden. Unabhängige elektrische Impulsbegrenzung ist erst mit der späteren Hardware festzulegen.
+**Freigabestatus:** Release Candidate, siehe `RELEASE_STATUS.md`.
