@@ -5,7 +5,7 @@ import logging
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from bridge import validate, mark_once, ENTITIES
+from bridge import validate, mark_once, ENTITIES, LOCK_ACTIONS
 
 LOG = logging.getLogger('door-stein')
 
@@ -59,5 +59,21 @@ def run_selftest():
 
     check('Unbekannte Tür-ID abgelehnt', lambda: must_reject(
         make_job('selftest-unknown', 'unknown-door', now + timedelta(seconds=12))))
-    assert set(ENTITIES) == {'building', 'apartment'}, 'Unerwartete Türkonfiguration'
-    LOG.info('SICHERHEITSTEST: 5/5 bestanden; KEINE Test-Helper geschaltet')
+    assert set(ENTITIES) == {'building'}, 'Unerwartete Impuls-Konfiguration'
+    def v2_job(action='open'):
+        expiry = (datetime.now(timezone.utc) + timedelta(seconds=12)).isoformat().replace('+00:00', 'Z')
+        msg = f'door-stein-v2\nselftest-v2\napartment\n{action}\n{expiry}'.encode('utf-8')
+        return {'id': 'selftest-v2', 'door_id': 'apartment', 'version': 2,
+                'action': action, 'expires_at': expiry,
+                'signature': hmac.new(secret, msg, hashlib.sha256).hexdigest()}
+    check('V2-Schlossaktion korrekt signiert', lambda: (validate(v2_job(), secret)[3] == 'open') or (_ for _ in ()).throw(AssertionError()))
+    def action_tamper():
+        altered = v2_job()
+        altered['action'] = 'unlock'
+        must_reject(altered)
+    check('Manipulierte Schlossaktion abgelehnt', action_tamper)
+    check('Alten Wohnungstür-Impuls ablehnen', lambda: must_reject(
+        make_job('legacy-apartment', 'apartment', now + timedelta(seconds=12))))
+    check('Unbekannte V2-Aktion ablehnen', lambda: must_reject(v2_job('pulse')))
+    assert set(LOCK_ACTIONS) == {'lock', 'unlock', 'open'}
+    LOG.info('SICHERHEITSTEST: 9/9 bestanden; KEINE Test-Helper geschaltet')

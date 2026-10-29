@@ -26,8 +26,9 @@ AUDIT_CLEANUP_SECONDS = 86400
 HA_BASE = 'http://supervisor/core/api'
 ENTITIES = {
     'building': 'input_boolean.door_stein_hauseingang',
-    'apartment': 'input_boolean.door_stein_wohnungstuer',
 }
+LOCK_ENTITY = 'lock.door_stein_wohnungstur_testschloss'
+LOCK_ACTIONS = {'lock': ('lock', 'locked'), 'unlock': ('unlock', 'unlocked'), 'open': ('open', 'unlocked')}
 
 
 def load_config():
@@ -61,19 +62,29 @@ def parse_expiry(raw):
 
 
 def validate(job, secret):
+    """Legacy v1 is allowed only for the building impulse. Apartment requires signed v2 action."""
+    if not isinstance(job, dict):
+        raise ValueError('Auftrag ist kein Objekt')
     job_id, door, expiry, signature = (job.get(k) for k in ('id', 'door_id', 'expires_at', 'signature'))
     if not all(isinstance(x, str) for x in (job_id, door, expiry, signature)):
         raise ValueError('Auftrag unvollständig')
-    if len(job_id) > 100 or door not in ENTITIES or len(signature) != 64:
+    if not (1 <= len(job_id) <= 100) or len(signature) != 64:
         raise ValueError('Auftrag ungültig')
-    msg = f'door-stein-v1\n{job_id}\n{door}\n{expiry}'.encode('utf-8')
+    if door == 'building' and 'action' not in job and 'version' not in job:
+        action = 'pulse'
+        msg = f'door-stein-v1\n{job_id}\n{door}\n{expiry}'.encode('utf-8')
+    elif door == 'apartment' and job.get('version') == 2 and job.get('action') in LOCK_ACTIONS:
+        action = job['action']
+        msg = f'door-stein-v2\n{job_id}\n{door}\n{action}\n{expiry}'.encode('utf-8')
+    else:
+        raise ValueError('Nicht unterstützte Tür, Aktion oder Protokollversion')
     expected = hmac.new(secret, msg, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(signature, expected):
         raise ValueError('HMAC-Prüfung fehlgeschlagen')
     current = time.time()
     if not (current < parse_expiry(expiry) <= current + 30):
         raise ValueError('Auftrag abgelaufen oder zeitlich ungültig')
-    return job_id, door, signature
+    return job_id, door, signature, action
 
 
 def mark_once(db, job_id):
@@ -103,6 +114,57 @@ def locally_enabled(session, supervisor_token):
     response.raise_for_status()
     state = response.json()
     return isinstance(state, dict) and state.get('entity_id') == FREIGABE_ENTITY and state.get('state') == 'on'
+
+
+def lock_state(session, supervisor_token):
+    response = session.get(f'{HA_BASE}/states/{LOCK_ENTITY}',
+        headers={'Authorization': f'Bearer {supervisor_token}'}, timeout=4)
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict) or payload.get('entity_id') != LOCK_ENTITY:
+        raise ValueError('Ungültige Schlosszustandsantwort')
+    return payload.get('state')
+
+
+def lock_action(session, supervisor_token, action):
+    response = session.post(f'{HA_BASE}/services/lock/{action}',
+        headers={'Authorization': f'Bearer {supervisor_token}'},
+        json={'entity_id': LOCK_ENTITY}, timeout=4)
+    response.raise_for_status()
+
+
+def execute_lock(session, supervisor_token, job, action, db):
+    """Fail closed. No retries of lock.open; unknown results are never successes."""
+    if action not in LOCK_ACTIONS:
+        raise ValueError('Unbekannte Schlossaktion')
+    if not locally_enabled(session, supervisor_token):
+        raise PermissionError('Lokale Freigabe ausgeschaltet')
+    before = lock_state(session, supervisor_token)
+    if before not in ('locked', 'unlocked'):
+        raise UnsafeOutput('Schlosszustand nicht eindeutig')
+    if action == 'open' and before != 'unlocked':
+        raise PermissionError('Falle ziehen nur bei bestätigtem unlocked')
+    if time.time() >= parse_expiry(job['expires_at']):
+        raise ValueError('Auftrag vor Schlossaktion abgelaufen')
+    # Immediately re-read both gates before the irreversible latch command.
+    if not locally_enabled(session, supervisor_token):
+        raise PermissionError('Lokale Freigabe entzogen')
+    if action == 'open' and lock_state(session, supervisor_token) != 'unlocked':
+        raise UnsafeOutput('Schloss unmittelbar vor Falleziehen nicht unlocked')
+    audit(db, job['id'], 'apartment', 'lock_action_attempt_started', action)
+    lock_action(session, supervisor_token, action)
+    if action == 'open':
+        # The HA lock interface has no reliable sensor for a successful latch pull.
+        # Therefore do not claim a physically confirmed opening.
+        audit(db, job['id'], 'apartment', 'latch_command_sent_unverified')
+        return 'command_sent'
+    expected = LOCK_ACTIONS[action][1]
+    deadline = time.monotonic() + 12
+    while time.monotonic() < deadline:
+        if lock_state(session, supervisor_token) == expected:
+            return 'confirmed'
+        time.sleep(0.3)
+    raise TimeoutError('Schlosszustand nicht bestätigt: ' + expected)
 
 
 def ack(session, worker, token, job_id, signature, status):
@@ -213,7 +275,7 @@ def run():
     next_cleanup = time.monotonic() + AUDIT_CLEANUP_SECONDS
     reporter = ErrorReporter()
     http = requests.Session()
-    LOG.info('Door Stein Bridge 1.0: Polling alle %d Sekunden; HA-Helper-Ansteuerung', interval)
+    LOG.info('Door Stein Bridge 1.1.0: Hauseingang-Impuls und signierte v2-Schlossaktionen; Polling %d s', interval)
     LOG.info('Lokale HA-Freigabe wird vor jedem Auftrag geprüft; lokales Audit aktiviert')
     outputs_safe = False
     while True:
@@ -286,7 +348,7 @@ def run():
                     turn_on_started = False
                     door = '?'
                     try:
-                        job_id, door, signature = validate(job, secret)
+                        job_id, door, signature, action = validate(job, secret)
                         if not mark_once(db, job_id):
                             audit(db, job_id, door, 'duplicate_rejected')
                             LOG.warning('Auftrag bereits verarbeitet: %s', job_id)
@@ -295,6 +357,16 @@ def run():
                         if not locally_enabled(http, supervisor_token):
                             audit(db, job_id, door, 'local_gate_denied')
                             ack(http, worker, token, job_id, signature, 'cancelled')
+                            continue
+                        if door == 'apartment':
+                            # Marked as claimed before any action; never retry a possibly executed command.
+                            turn_on_started = True
+                            result = execute_lock(http, supervisor_token, job, action, db)
+                            # Legacy worker understands only completed/cancelled. 'open' is
+                            # acknowledged as dispatched, NOT as verified physical opening.
+                            audit(db, job_id, door, 'lock_' + result, action)
+                            ack(http, worker, token, job_id, signature, 'completed')
+                            audit(db, job_id, door, 'ack_completed', action)
                             continue
                         entity = ENTITIES[door]
                         # The preflight must verify OFF, not merely request it.
