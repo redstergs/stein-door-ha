@@ -6,6 +6,7 @@ import logging
 import os
 import sqlite3
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -262,6 +263,52 @@ def ensure_outputs_off(session, supervisor_token, db, reason='recovery', retries
         raise UnsafeOutput('Tür-Helper nicht sicher AUS: ' + ','.join(failed))
 
 
+
+class LockStatePublisher:
+    """Publish initial state, changes, and recovery snapshots; never invent an unlocked state."""
+    def __init__(self):
+        self.boot_id = str(uuid.uuid4())
+        self.seq = 0
+        self.last_sent_state = None
+        self.pending = None
+        self.last_success = None
+        self.last_attempt = 0.0
+
+    def publish(self, session, worker, token, supervisor_token, force=False):
+        # No cached HA state is used for authorization; this is UI information only.
+        try:
+            current = lock_state(session, supervisor_token)
+            if current not in ('locked', 'unlocked'):
+                current = 'unknown'
+        except Exception as exc:
+            LOG.warning('Schlossstatus nicht lesbar: %s', type(exc).__name__)
+            current = 'unknown'
+        if self.pending is None:
+            if not force and current == self.last_sent_state:
+                return
+            self.pending = {'state': current, 'boot_id': self.boot_id, 'seq': self.seq}
+        # The initial seq=0 must be acknowledged before advancing to subsequent
+        # messages, even when HA changes while Cloudflare is unavailable.
+        try:
+            response = session.post(f'{worker}/api/ha/lock-state',
+                headers={'Authorization': f'Bearer {token}'}, json=self.pending, timeout=5)
+            response.raise_for_status()
+            result = response.json()
+            if not isinstance(result, dict) or result.get('ok') is not True:
+                raise ValueError('Schlossstatus nicht bestätigt')
+            sent = self.pending['state']
+            self.last_sent_state = sent
+            self.last_success = time.monotonic()
+            self.pending = None
+            self.seq += 1
+            if sent != current:
+                self.pending = {'state': current, 'boot_id': self.boot_id, 'seq': self.seq}
+            LOG.info('Schlossstatus übertragen: %s (seq=%d)', sent, self.seq - 1)
+        except Exception as exc:
+            LOG.warning('Schlossstatusübertragung fehlgeschlagen: %s', type(exc).__name__)
+            # Preserve same seq on retry, never advance an unacknowledged update.
+
+
 def run():
     options, worker, token, secret, supervisor_token = load_config()
     if options.get('security_selftest', True):
@@ -275,9 +322,12 @@ def run():
     next_cleanup = time.monotonic() + AUDIT_CLEANUP_SECONDS
     reporter = ErrorReporter()
     http = requests.Session()
-    LOG.info('Door Stein Bridge 1.1.0: Hauseingang-Impuls und signierte v2-Schlossaktionen; Polling %d s', interval)
+    LOG.info('Door Stein Bridge 1.1.1: Hauseingang-Impuls und signierte v2-Schlossaktionen; Polling %d s', interval)
     LOG.info('Lokale HA-Freigabe wird vor jedem Auftrag geprüft; lokales Audit aktiviert')
     outputs_safe = False
+    publisher = LockStatePublisher()
+    status_was_connected = False
+    last_status_check = 0.0
     while True:
         try:
             if time.monotonic() >= next_cleanup:
@@ -295,6 +345,14 @@ def run():
                 LOG.warning('Keine Auftragsabholung: Ausgänge nicht sicher AUS')
                 time.sleep(interval)
                 continue
+            # Status channel is independent from door-command execution. Send boot
+            # snapshot (seq=0), subsequent changes, and recovery snapshot.
+            if time.monotonic() - last_status_check >= min(interval, 5):
+                last_status_check = time.monotonic()
+                was_connected = publisher.last_success is not None and status_was_connected
+                publisher.publish(http, worker, token, supervisor_token,
+                                  force=not status_was_connected)
+                status_was_connected = publisher.pending is None
             # Separate diagnostic channel. Never maps to Home Assistant service calls.
             try:
                 diagnostic_response = http.get(f'{worker}/api/ha/diagnostics/poll',

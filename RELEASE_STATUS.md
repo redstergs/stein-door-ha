@@ -1,17 +1,14 @@
-# Door Stein HA Bridge v1.1.0 – Entwicklungsstand
+# Door Stein Bridge 1.1.1 – Integrationskandidat
 
-**Nicht für den produktiven Türbetrieb freigegeben.** Lokal syntaktisch geprüft und 9 isolierte Sicherheitsselbsttests bestanden; keine End-to-End-Tests gegen den Cloudflare Worker oder echtes Nuki-Schloss.
+Basis: Bridge 1.1.0 Preview. Neu: Status-Synchronisierung an Worker 1.1.0.
 
-- Legacy v1-Aufträge ausschließlich für `building` (Hauseingang); alter `apartment`-Impuls wird abgelehnt.
-- V2-Wohnungstüraufträge: `version: 2`, `door_id: apartment`, `action: lock|unlock|open`; HMAC-SHA256 über `door-stein-v2\n{id}\n{door_id}\n{action}\n{expires_at}`.
-- Testschloss: `lock.door_stein_wohnungstur_testschloss` (exakte Home-Assistant-Entity-ID).
-- Lokale Freigabe vor Befehlen; `open` nur bei unmittelbar erneut geprüftem `unlocked`.
-- `lock` und `unlock` erwarten bestätigten HA-Zustand; `open` hat **keine physische Erfolgssensorik** und wird nur als gesendeter Befehl protokolliert.
-- Kein automatischer Wiederholungsversuch bei unklarem Ausgang. Vorhandener Audit-/Duplikatschutz bleibt erhalten.
+## Status-POST
+`POST /api/ha/lock-state` mit Bearer HA API Token, JSON:
+`{"state":"locked|unlocked|unknown","boot_id":"UUID","seq":0}`.
+Erster Statusbericht je Bridge-Prozess mit seq=0, danach fortlaufend. Ein nicht bestätigter Bericht wird mit gleicher Sequenz erneut gesendet. Status wird aus der HA-Entität gelesen; bei Fehlern `unknown`. Nach Start und Wiederverbindung erfolgt erneute Übermittlung. Ein Statusbericht autorisiert niemals selbst eine Aktion.
 
-## Noch offen für die gemeinsame Worker-Version
+## Unverändert
+Hauseingangsimpuls; HMAC v1 für Hauseingang; HMAC v2 für Wohnungstür; lokale Freigabe; Replay-Schutz; unmittelbare Schlossprüfung vor `lock.open`; Audit.
 
-- Worker muss V2-Jobs samt Aktion korrekt autorisieren und signieren; die bisherige Worker-Version sendet diese nicht.
-- Bridge→Worker Status-Synchronisierung, inklusive Start, Zustandsänderung und Reconnect, benötigt einen abgestimmten API-Endpunkt und wird **noch nicht** bereitgestellt.
-- Ein eigener ACK-Status `command_sent` statt `completed` für Falleziehen muss im Worker-Protokoll ergänzt werden. Aktuell bedeutet `completed` bei `open` lediglich, dass HA den Service-Aufruf angenommen hat, **nicht**, dass die Tür physisch geöffnet wurde.
-- End-to-End-, Fehlermodus- und Recovery-Tests vor Deployment.
+## Prüfungen
+Python-Syntaxprüfung und isolierte Status-Synchronisierungstests bestanden. **Kein End-to-End-Test** mit Cloudflare D1, Worker und Home Assistant. Keine produktive Freigabe; zuerst Worker-Migrationen und Integrationstests prüfen. Insbesondere Worker-ACK nach Jobablauf, Worker-Neustarts/Sequenzübernahme und die tatsächliche Sicherheitswirkung der Schloss-Falle müssen im Gesamtsystem getestet werden.
