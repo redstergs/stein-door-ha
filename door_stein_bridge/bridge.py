@@ -338,7 +338,7 @@ def run():
     next_cleanup = time.monotonic() + AUDIT_CLEANUP_SECONDS
     reporter = ErrorReporter()
     http = requests.Session()
-    LOG.info('Door Stein Bridge 1.1.2: Hauseingang-Impuls und signierte v2-Schlossaktionen; Polling %d s', interval)
+    LOG.info('Door Stein Bridge 1.2.0-rc.1: Hauseingang-Impuls und signierte v2-Schlossaktionen; Polling %d s', interval)
     LOG.info('Lokale HA-Freigabe wird vor jedem Auftrag geprüft; lokales Audit aktiviert')
     outputs_safe = False
     publisher = LockStatePublisher(next_boot_id(db))

@@ -1,7 +1,7 @@
 # Door · Stein – Home Assistant Bridge
 
-**Version 1.1.2 · 30. Oktober 2026**  
-**Kompatibler Worker:** v1.1.9
+**Version 1.2.0-rc.1 · 30. Oktober 2026**  
+**Kompatibler Worker:** v1.2.0-rc.1
 
 Dieses Repository enthält das Home-Assistant-Add-on `door_stein_bridge/` zur sicheren Ausführung signierter Türbefehle und Synchronisierung des Schlossstatus mit dem Cloudflare Worker.
 
@@ -18,7 +18,7 @@ Dieses Repository enthält das Home-Assistant-Add-on `door_stein_bridge/` zur si
 
 1. Repository als benutzerdefiniertes Add-on-Repository in Home Assistant hinzufügen und **Door Stein Bridge** installieren.
 2. Zugangsdaten und Schlüssel ausschließlich lokal in der Add-on-Konfiguration hinterlegen, niemals im Git-Repository.
-3. **Bei Update auf 1.1.2 zuerst Worker 1.1.9 deployen, danach die Bridge aktualisieren.**
+3. **Bei Update auf v1.2.0-rc.1 zuerst Worker v1.2.0-rc.1 deployen, danach die Bridge aktualisieren.**
 4. Die bestehende lokale SQLite-Datei der Bridge beibehalten; sie enthält Replay-Schutzdaten und die persistente Startgeneration.
 
 ## Türsteuerung und Sicherheit
@@ -83,3 +83,10 @@ Die Signatur ist HMAC-SHA256 über die UTF-8-Nachricht mit den durch Zeilenumbr�
 ### 1.1.0 – Preview
 - HMAC-v2-Aktionen `lock`, `unlock`, `open` für die Wohnungstür.
 - HMAC-v1 für den Hauseingang beibehalten.
+
+
+### 1.2.0-rc.1 – 30.10.2026
+
+- Gemeinsame Release-Candidate-Version mit Worker v1.2.0-rc.1.
+- Bridge-Funktionslogik gegenüber 1.1.2 unverändert; Heartbeat, Ablaufprüfung und persistente Statussequenzen bleiben bestehen.
+- Vor Einsatz an realer Schloss-Hardware sind Integrations- und Hardwaretests erforderlich.

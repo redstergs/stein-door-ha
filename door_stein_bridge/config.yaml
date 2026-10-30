@@ -1,5 +1,5 @@
 name: Door Stein Bridge
-version: "1.1.2"
+version: "1.2.0-rc.1"
 slug: door_stein_bridge
 description: Hauseingangsimpuls und signierte Schlossaktionen und Status-Synchronisierung (Testschloss).
 arch:
