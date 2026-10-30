@@ -152,6 +152,8 @@ def execute_lock(session, supervisor_token, job, action, db):
         raise PermissionError('Lokale Freigabe entzogen')
     if action == 'open' and lock_state(session, supervisor_token) != 'unlocked':
         raise UnsafeOutput('Schloss unmittelbar vor Falleziehen nicht unlocked')
+    if time.time() >= parse_expiry(job['expires_at']):
+        raise ValueError('Auftrag unmittelbar vor Schlossserviceaufruf abgelaufen')
     audit(db, job['id'], 'apartment', 'lock_action_attempt_started', action)
     lock_action(session, supervisor_token, action)
     if action == 'open':
@@ -187,7 +189,18 @@ def initialize_db(db):
     db.execute('PRAGMA journal_mode=WAL')
     db.execute('CREATE TABLE IF NOT EXISTS processed (id TEXT PRIMARY KEY, processed_at INTEGER NOT NULL)')
     db.execute('CREATE TABLE IF NOT EXISTS bridge_audit (seq INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT, door_id TEXT, event TEXT NOT NULL, detail TEXT, created_at TEXT NOT NULL)')
+    db.execute('CREATE TABLE IF NOT EXISTS bridge_meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL)')
     db.commit()
+
+
+def next_boot_id(db):
+    # Persist a strictly increasing generation across Bridge restarts, even if the clock goes backwards.
+    with db:
+        db.execute("INSERT OR IGNORE INTO bridge_meta(key,value) VALUES('boot_generation',0)")
+        previous = db.execute("SELECT value FROM bridge_meta WHERE key='boot_generation'").fetchone()[0]
+        generation = max(previous + 1, int(time.time() * 1000))
+        db.execute("UPDATE bridge_meta SET value=? WHERE key='boot_generation'", (generation,))
+    return f'g{generation:016d}-{uuid.uuid4()}'
 
 
 def prune_audit(db):
@@ -266,12 +279,13 @@ def ensure_outputs_off(session, supervisor_token, db, reason='recovery', retries
 
 class LockStatePublisher:
     """Publish initial state, changes, and recovery snapshots; never invent an unlocked state."""
-    def __init__(self):
-        self.boot_id = str(uuid.uuid4())
+    def __init__(self, boot_id=None):
+        self.boot_id = boot_id or str(uuid.uuid4())
         self.seq = 0
         self.last_sent_state = None
         self.pending = None
         self.last_success = None
+        self.heartbeat_seconds = 300
         self.last_attempt = 0.0
 
     def publish(self, session, worker, token, supervisor_token, force=False):
@@ -284,7 +298,9 @@ class LockStatePublisher:
             LOG.warning('Schlossstatus nicht lesbar: %s', type(exc).__name__)
             current = 'unknown'
         if self.pending is None:
-            if not force and current == self.last_sent_state:
+            if (not force and current == self.last_sent_state
+                    and self.last_success is not None
+                    and time.monotonic() - self.last_success < self.heartbeat_seconds):
                 return
             self.pending = {'state': current, 'boot_id': self.boot_id, 'seq': self.seq}
         # The initial seq=0 must be acknowledged before advancing to subsequent
@@ -322,10 +338,10 @@ def run():
     next_cleanup = time.monotonic() + AUDIT_CLEANUP_SECONDS
     reporter = ErrorReporter()
     http = requests.Session()
-    LOG.info('Door Stein Bridge 1.1.1: Hauseingang-Impuls und signierte v2-Schlossaktionen; Polling %d s', interval)
+    LOG.info('Door Stein Bridge 1.1.2: Hauseingang-Impuls und signierte v2-Schlossaktionen; Polling %d s', interval)
     LOG.info('Lokale HA-Freigabe wird vor jedem Auftrag geprüft; lokales Audit aktiviert')
     outputs_safe = False
-    publisher = LockStatePublisher()
+    publisher = LockStatePublisher(next_boot_id(db))
     status_was_connected = False
     last_status_check = 0.0
     while True:
